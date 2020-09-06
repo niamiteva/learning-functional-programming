@@ -30,60 +30,59 @@ type Data = String
 type Path = String
 type Res = IO String
 
-data FSItem = File Name Data 
-    | Folder Name [FSItem] 
-    deriving (Show)
+data FSItem = File Name Data | Folder Name [FSItem] 
+                deriving (Eq, Ord, Enum, Show, Read)
+
 -- ToDO persistent vector
 -- todo data Either = left a | right b ==> success | error
 -- [FSItem] [FSItem] -> [before the focused item] [after the focused item] 
-data FSCrumb = FSCrumb Name Path [FSItem] [FSItem] 
-    deriving (Show)
+
+type Before = [FSItem]
+type After = [FSItem]
+
+data FSCrumb = FSCrumb Name Path Before After
+                deriving (Eq, Ord, Enum, Show, Read)
 
 type FSZipper = (FSItem, [FSCrumb]) 
 
 data Result = FSZipper | Res
 
---pwd [option] - print name of current/working directory
--- FSCrumbs - get all before the focused dir + the name of the focused dir
-pwd :: FSZipper -> IO String
-pwd (focus, FSCrumb name path ls rs:bc) = return path
-
+-- GETTERS -----------------------------------------------------
 getCurrentPath :: FSZipper -> String
-getCurrentPath (focus, FSCrumb name path ls rs:bc) = path -- ++ "/" ++ name
+getCurrentPath (focus, FSCrumb name path ls rs:bc) = path
 
--- TODO: fix it for relative path
--- cd [dir] - Change the shell working directory.
--- [dir] - relative dir/ and absolute ../
--- split [dir] by '/' and for each [subdirname] call dirUp or gotoDir
--- for each ../ call dirUp
--- for each dir/ call gotoDir
-cd :: [String] -> FSZipper -> FSZipper
-cd [dir] fsz = do 
-    dirs <- split '/' dir
-    case dirs of
-        x -> if isAbsolute x 
-                    then dirUp fsz
-                    else gotoDir x fsz 
-        (x:xs) -> if isAbsolute x
-                    then cd xs (dirUp fsz)
-                    else cd xs (gotoDir x fsz)
+getFolderName :: FSItem -> String
+getFolderName (Folder name dat) = name
+
+getFileData :: FSItem -> String
+getFileData (File n d) = d
+
+getFileName :: FSItem -> String
+getFileName (File name dat) = name
+
+getItemName :: FSItem -> String
+getItemName (Folder n _) = n
+getItemName (File n _) = n
+
+--HELPERS-------------------------------------------------------
+
+-- rewrite prelude's words to split string into list of words by given character
+wordsBy :: (Char -> Bool) -> String -> [String]
+wordsBy c s =  case dropWhile (\x-> x == c) s of
+                      "" -> []
+                      s' -> w : wordsBy c s''
+                            where (w, s'') = break (\x -> x == c) s'
 
 isAbsolute :: String -> Bool
 isAbsolute x = x == ".."
-
-split :: Char -> String -> [String]
-split c s = reverse (go s []) where
-    go s' ws = case (dropWhile (\c' -> c' == c) s') of
-        "" -> ws
-        rem -> go ((dropWhile (\c' -> c' /= c) rem)) ((takeWhile (\c' -> c' /= c) rem) : ws)
 
 -- cd ../
 dirUp :: FSZipper -> FSZipper  
 dirUp (item, FSCrumb name path ls rs:bs) = 
     let newPath = intercalate "/" ( init ( split  '/' path ))
         newItem = (ls ++ [item] ++ rs)
-        folderName = getFolderName item
-    in (Folder name newItem, [FSCrumb folderName (unwords ("/" ++ (words newPath))) (ls ++ [item] ++ rs) bs])
+        folderName = getItemName item
+    in (Folder name newItem, [FSCrumb folderName newPath (ls ++ [item] ++ rs) bs])
 
 -- cd dir/
 gotoDir :: Name -> FSZipper -> FSZipper  
@@ -100,8 +99,30 @@ isDir name (Folder folderName _) = name == folderName
 isFile :: Name -> FSItem -> Bool  
 isFile name (File fileName _) = name == fileName
 
-getFolderName :: FSItem -> String
-getFolderName (Folder name dat) = name
+
+
+-- MAIN OPERATIONS
+
+--pwd [option] - print name of current/working directory
+-- FSCrumbs - get all before the focused dir + the name of the focused dir
+pwd :: FSZipper -> IO String
+pwd fsz = return $ getCurrentPath fsz
+
+-- cd dir - Change the shell working directory.
+-- dir - relative dir/ and absolute ../
+-- split dir by '/' and for each [subdirname] call dirUp or gotoDir
+-- for each ../ call dirUp
+-- for each dir/ call gotoDir
+cd :: String -> FSZipper -> FSZipper
+cd dir fsz = case dirs of
+                x -> if isAbsolute x 
+                            then dirUp fsz
+                            else gotoDir x fsz 
+                (x:xs) -> if isAbsolute x
+                            then cd ls (dirUp fsz)
+                            else cd ls (gotoDir x fsz)
+                                where ls = dropWhile (\x -> x \= '/') xs
+            where dirs = wordsBy '/' dir
 
 --cat
 --make funct that takes the Data of File 
@@ -121,12 +142,7 @@ cat [x] (Folder name items, bs) da =
                     then newFile (File (getFileName xs) (unwords dat))
                     else let (ls, f:rs) = break (isFile x) items 
                             in cat xs (Folder name items, bs) (dat ++ (words (getFileData f))) 
-
-getFileData :: FSItem -> String
-getFileData (File name dat) = dat
-
-getFileName :: FSItem -> String
-getFileName (File name dat) = name
+                            
 
 newFile :: FSItem -> FSZipper -> FSZipper  
 newFile item (Folder folderName items, bs) = 
@@ -146,9 +162,7 @@ getAllChildren item items children = case (fst items) of
 getAllChildren item items children = case (fst items) of
                                             x -> getAllChildren (fst items) (tail items) (children ++ (words (getItemName item)))
 
-getItemName :: FSItem -> String
-getItemName (Folder name dat) = name
-getItemName (File name dat) = name
+
 
 --rm
 rm :: [String] -> FSZipper -> FSZipper 
