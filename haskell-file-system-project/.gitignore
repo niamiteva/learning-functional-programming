@@ -1,6 +1,3 @@
-.stack-work/
-haskell-file-system.cabal
-*~
 dist
 dist-*
 cabal-dev
