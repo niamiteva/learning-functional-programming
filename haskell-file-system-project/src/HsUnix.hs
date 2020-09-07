@@ -7,9 +7,8 @@ module HsUnix
     , getCurrentPath 
     , cd
     , dirUp
-    , gotoDir
-    , isDir
-    , isFile
+    , dirTo
+    , nameIs
     , getFolderName
     , cat
     , getFileData
@@ -31,7 +30,7 @@ type Path = String
 type Res = IO String
 
 data FSItem = File Name Data | Folder Name [FSItem] 
-                deriving (Eq, Ord, Enum, Show, Read)
+                deriving (Eq, Ord, Show, Read)
 
 -- ToDO persistent vector
 -- todo data Either = left a | right b ==> success | error
@@ -40,8 +39,8 @@ data FSItem = File Name Data | Folder Name [FSItem]
 type Before = [FSItem]
 type After = [FSItem]
 
-data FSCrumb = FSCrumb Name Path Before After
-                deriving (Eq, Ord, Enum, Show, Read)
+data FSCrumb = FSCrumb Name Before After
+                deriving (Eq, Ord, Show, Read)
 
 type FSZipper = (FSItem, [FSCrumb]) 
 
@@ -49,7 +48,7 @@ data Result = FSZipper | Res
 
 -- GETTERS -----------------------------------------------------
 getCurrentPath :: FSZipper -> String
-getCurrentPath (focus, FSCrumb name path ls rs:bc) = path
+getCurrentPath (focus, FSCrumb name ls rs:bc) = (unwordsBy '/' $ getBeforeNames ls) ++ "/" ++ name ++ "/" ++ (getItemName focus) 
 
 getFolderName :: FSItem -> String
 getFolderName (Folder name dat) = name
@@ -64,42 +63,47 @@ getItemName :: FSItem -> String
 getItemName (Folder n _) = n
 getItemName (File n _) = n
 
+getBeforeNames::[FSItem] -> [String]
+getBeforeNames [] = []
+getBeforeNames (x:xs) = (getItemName x) : (getBeforeNames xs)
 --HELPERS-------------------------------------------------------
 
--- rewrite prelude's words to split string into list of words by given character
-wordsBy :: (Char -> Bool) -> String -> [String]
-wordsBy c s =  case dropWhile (\x-> x == c) s of
+-- prelude's words rewritten to split string into list of words by given character
+wordsBy :: Char -> String -> [String]
+wordsBy c s =  case dropWhile (==c) s of
                       "" -> []
                       s' -> w : wordsBy c s''
-                            where (w, s'') = break (\x -> x == c) s'
+                            where (w, s'') = break (== c) s'
+
+-- prelude's unwords rewritten to concat list of strings into string with given separator
+unwordsBy :: Char -> [String] -> String
+unwordsBy _ [] =  ""
+unwordsBy c ws =  foldr1 (\w s -> w ++ c:s) ws
 
 isAbsolute :: String -> Bool
 isAbsolute x = x == ".."
 
 -- cd ../
 dirUp :: FSZipper -> FSZipper  
-dirUp (item, FSCrumb name path ls rs:bs) = 
-    let newPath = intercalate "/" ( init ( split  '/' path ))
-        newItem = (ls ++ [item] ++ rs)
-        folderName = getItemName item
-    in (Folder name newItem, [FSCrumb folderName newPath (ls ++ [item] ++ rs) bs])
+dirUp (item, FSCrumb name ls rs:bs) = 
+    let newItem = (ls ++ [item] ++ rs)
+    in (Folder name newItem, bs)
 
 -- cd dir/
-gotoDir :: Name -> FSZipper -> FSZipper  
-gotoDir name (Folder folderName items, bs) =   
-    let (ls, item:rs) = break (isDir name) items 
-        newPath = (getCurrentPath (Folder folderName items, bs)) ++ "/" ++ folderName
-    in  (item, FSCrumb folderName newPath ls rs:bs)  
+dirTo :: Name -> FSZipper -> FSZipper  
+dirTo name (Folder folderName items, bs) =   
+    let (ls, item:rs) = break (nameIs name) items  
+    in  (item, FSCrumb folderName ls rs:bs)  
+  
+-- check if item exists
+nameIs :: Name -> FSItem -> Bool  
+nameIs name (Folder folderName _) = name == folderName  
+nameIs name (File fileName _) = name == fileName  
 
--- check if dir exists    
-isDir :: Name -> FSItem -> Bool  
-isDir name (Folder folderName _) = name == folderName  
-
--- check if file exists
-isFile :: Name -> FSItem -> Bool  
-isFile name (File fileName _) = name == fileName
-
-
+-- add file into current dir
+newFile :: FSItem -> FSZipper -> FSZipper  
+newFile item (Folder folderName items, bs) = 
+    (Folder folderName (item:items), bs) 
 
 -- MAIN OPERATIONS
 
@@ -113,41 +117,47 @@ pwd fsz = return $ getCurrentPath fsz
 -- split dir by '/' and for each [subdirname] call dirUp or gotoDir
 -- for each ../ call dirUp
 -- for each dir/ call gotoDir
+-- does not work always for relative paths
 cd :: String -> FSZipper -> FSZipper
-cd dir fsz = case dirs of
-                x -> if isAbsolute x 
-                            then dirUp fsz
-                            else gotoDir x fsz 
-                (x:xs) -> if isAbsolute x
-                            then cd ls (dirUp fsz)
-                            else cd ls (gotoDir x fsz)
-                                where ls = dropWhile (\x -> x \= '/') xs
-            where dirs = wordsBy '/' dir
+cd dir fsz = 
+    let dirs = wordsBy '/' dir
+    in case dirs of
+        x -> if isAbsolute $ head x 
+             then dirUp fsz
+             else dirTo (head x) fsz 
+        (x:xs) -> if isAbsolute x
+                  then cd ls (dirUp fsz)
+                  else cd ls (dirTo x fsz)
+                  where ls = unwordsBy '/' xs
 
---cat
+--cat file - print the data of file 
 --make funct that takes the Data of File 
 --if name is file 
 --call that function and concat the data if multiple files 
 -- if not file => error msg
 -- does not change the FSCrumbs
 -- > calls touch and display the Data
-cat :: [String] -> FSZipper -> [String] -> IO String 
+cat :: [String] -> FSZipper -> String -> String
 --cat [] _ _= "cat expect name of file as argument" 
-cat [x] (Folder name items, bs) da = 
-    cat files (Folder name items, bs) dat = do
-        case files of
-            [x] -> let (ls, f:rs) = break (isFile x) items 
-                    in return (unwords (dat ++ (words (getFileData f))))
-            (x:xs) -> if x == ">"
-                    then newFile (File (getFileName xs) (unwords dat))
-                    else let (ls, f:rs) = break (isFile x) items 
-                            in cat xs (Folder name items, bs) (dat ++ (words (getFileData f))) 
-                            
+cat [file] fsz d = let (File name dat, bs) = dirTo file fsz in d ++ dat
+cat (file:files) fsz d  = 
+    if file == ">"
+    then newFile (File file d) fsz
+    else let (File name dat, bs) = dirTo file fsz
+         in d ++ (cat files fsz d)
 
-newFile :: FSItem -> FSZipper -> FSZipper  
-newFile item (Folder folderName items, bs) = 
-    (Folder folderName (item:items), bs) 
+-- touch
+touch :: [String] -> FSZipper -> FSZipper
+--touch [] _ = putStrLn "touch expects file name as argument"
+touch [name] fsz = newFile (File name "") fsz
 
+--mkdir
+mkdir :: [String] -> FSZipper -> FSZipper
+--mkdir [] _ = putStrLn "mkdir expects file name as argument"
+mkdir [name] (Folder folderName items, bs) = 
+    let item = (Folder name [])
+    in (Folder folderName (item:items), bs) 
+                                                            
 --ls [OPTION] [FILE] - list directory contents
 --if no args => takes all none list items from the current dir from the zipper (our focused item)
 --if args call funct that finds the dir without changing FSCrumbs and takes all none list items
@@ -172,17 +182,6 @@ rm [name] (Folder folderName items, bs) = let (ls, f:rs) = break (isFile name) i
 rm [name] (Folder folderName items, bs) = let (ls, f:rs) = break (isDir name) items 
                                                        in (Folder folderName (ls ++ rs), bs) 
 
--- touch
-touch :: [String] -> FSZipper -> FSZipper
---touch [] _ = putStrLn "touch expects file name as argument"
-touch [name] (Folder folderName items, bs) = let item = (File name "")
-                                            in (Folder folderName (item:items), bs) 
-
---mkdir
-mkdir :: [String] -> FSZipper -> FSZipper
---mkdir [] _ = putStrLn "mkdir expects file name as argument"
-mkdir [name] (Folder folderName items, bs) = let item = (Folder name [])
-                                            in (Folder folderName (item:items), bs) 
 --TODo 
 -- mv
 -- mv :: [String] -> FSZipper -> FSZipper  

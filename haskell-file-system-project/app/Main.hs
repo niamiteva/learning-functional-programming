@@ -4,9 +4,9 @@ import HsUnix
 
 -- |Top level entry-point for shell.
 main :: IO ()
-main = do -- TODO: add initializing functions for fsitem, fscrumb, fszipper ?
-          fsz <- FSZipper (Folder "/" [], FSCrumb "/" "/" [] [])
-          prompt fsz
+main = do 
+        prompt fsz
+        where fsz = FSZipper (Folder "/" [], FSCrumb "/" [] [])
 
 -- |Loops, continually prompting, until exit status is sent.
 prompt :: FSZipper -> FSZipper
@@ -15,7 +15,7 @@ prompt fsz = do
     input <- getLine
     case input of
       Nothing -> prompt fsz
-      Just i -> runCommand $ (unwords . words) i
+      Just i -> execute $ (unwords . words) i
 
 execute :: String -> IO ()
 execute fsz input = do
