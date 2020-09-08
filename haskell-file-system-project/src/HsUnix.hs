@@ -2,53 +2,124 @@ module HsUnix
     ( FSItem(..)
     , FSCrumb(..)
     , FSZipper(..)
-    , Result
     , pwd
-    , getCurrentPath 
     , cd
-    , dirUp
-    , dirTo
-    , nameIs
-    , getFolderName
     , cat
-    , getFileData
-    , getFileName
-    , newFile
     , ls
-    , getAllChildren
     , rm
     , touch
     , mkdir
+    , mv
+    , getCurrentPath
     )
     where
 
-import Data.List
+import Data.List ()
+import Data.Either ()
 
 type Name = String  
 type Data = String  
 type Path = String
-type Res = IO String
 
 data FSItem = File Name Data | Folder Name [FSItem] 
                 deriving (Eq, Ord, Show, Read)
 
--- ToDO persistent vector
--- todo data Either = left a | right b ==> success | error
--- [FSItem] [FSItem] -> [before the focused item] [after the focused item] 
-
 type Before = [FSItem]
 type After = [FSItem]
-
 data FSCrumb = FSCrumb Name Before After
                 deriving (Eq, Ord, Show, Read)
 
 type FSZipper = (FSItem, [FSCrumb]) 
 
-data Result = FSZipper | Res
+--data Either a b = Left a | Right b -- ==> success | error
+
+-- ToDO persistent vector
+-- todo 
+-- [FSItem] [FSItem] -> [before the focused item] [after the focused item] 
+-- MAIN OPERATIONS
+
+--pwd [option] - print name of current/working directory
+-- FSCrumbs - get all before the focused dir + the name of the focused dir
+pwd :: FSZipper -> IO String
+pwd fsz = return $ getCurrentPath fsz
+
+-- cd dir - Change the shell working directory.
+-- dir - relative dir/ and absolute ../
+-- split dir by '/' and for each [subdirname] call dirUp or gotoDir
+-- for each ../ call dirUp
+-- for each dir/ call gotoDir
+-- does not work always for relative paths
+cd :: String -> FSZipper -> FSZipper
+cd dir fsz = 
+    let dirs = wordsBy '/' dir
+    in case dirs of
+        x -> if isAbsolute $ head x 
+             then dirUp fsz
+             else dirTo (head x) fsz 
+        (x:xs) -> if isAbsolute x
+                  then cd ls (dirUp fsz)
+                  else cd ls (dirTo x fsz)
+                  where ls = unwordsBy '/' xs
+
+--cat file - print the data of file 
+--make funct that takes the Data of File 
+--if name is file 
+--call that function and concat the data if multiple files 
+-- if not file => error msg
+-- does not change the FSCrumbs
+-- > calls touch and display the Data
+--cat :: [String] -> FSZipper -> String -> Either String FSZipper
+--cat [] _ _= "cat expect name of file as argument" 
+cat :: [String] -> FSZipper -> String -> Either String FSZipper
+cat [file] fsz d = 
+    let (File name dat, bs) = dirTo file fsz 
+    in Left $ d ++ dat
+cat (file:files) fsz d  = 
+    if file == ">"
+    then Right $ newFile (File file d) fsz
+    else let (File name dat, bs) = dirTo file fsz
+         in Left $ d ++ dd
+         where Left dd = cat files fsz d
+
+-- touch [options]... File...
+touch :: [String] -> FSZipper -> FSZipper
+--touch [] _ = putStrLn "touch expects file name as argument"
+touch [name] fsz = newFile (File name "") fsz
+
+-- mkdir [Options] folder... - Create new folder(s), if they do not already exist
+mkdir :: [String] -> FSZipper -> FSZipper
+--mkdir [] _ = putStrLn "mkdir expects file name as argument"
+mkdir [name] (Folder folderName items, bs) = 
+    let item = (Folder name [])
+    in (Folder folderName (item:items), bs) 
+                                                            
+--ls [OPTION] [FILE] - list directory contents
+--if no args => takes all none list items from the current dir from the zipper (our focused item)
+--if args call funct that finds the dir without changing FSCrumbs and takes all none list items
+ls :: [String] -> FSZipper -> IO String
+ls [] (Folder name items, bc) = return $ unwords $ getFolderContent items
+ls args fsz = 
+    let newFSZ = cd (head args) fsz
+    in ls [] newFSZ
+
+-- rm [options]... file... - Remove files
+rm :: [String] -> FSZipper -> FSZipper 
+--rm [] _ = putStrLn "rm expect file name as argument"
+rm [name] (Folder folderName items, bs) = 
+    let (ls, f:rs) = break (nameIs name) items 
+    in (Folder folderName (ls ++ rs), bs) 
+
+-- mv
+mv :: [String] -> FSZipper -> FSZipper  
+--mv [] _ = putStrLn "mv expects file name and file as arguments"
+mv [newName] (Folder name items, bs) = (Folder newName items, bs)  
+mv [newName] (File name dat, bs) = (File newName dat, bs)  
+
 
 -- GETTERS -----------------------------------------------------
 getCurrentPath :: FSZipper -> String
-getCurrentPath (focus, FSCrumb name ls rs:bc) = (unwordsBy '/' $ getBeforeNames ls) ++ "/" ++ name ++ "/" ++ (getItemName focus) 
+getCurrentPath (focus, FSCrumb name ls rs:bc) = 
+    (unwordsBy '/' $ getBeforeNames ls) ++ "/" ++ name ++ "/" ++ (getItemName focus) 
 
 getFolderName :: FSItem -> String
 getFolderName (Folder name dat) = name
@@ -66,6 +137,11 @@ getItemName (File n _) = n
 getBeforeNames::[FSItem] -> [String]
 getBeforeNames [] = []
 getBeforeNames (x:xs) = (getItemName x) : (getBeforeNames xs)
+
+getFolderContent::[FSItem] -> [String]
+getFolderContent [] = []
+getFolderContent (x:xs)  = (getItemName x) : (getFolderContent xs)
+
 --HELPERS-------------------------------------------------------
 
 -- prelude's words rewritten to split string into list of words by given character
@@ -104,87 +180,3 @@ nameIs name (File fileName _) = name == fileName
 newFile :: FSItem -> FSZipper -> FSZipper  
 newFile item (Folder folderName items, bs) = 
     (Folder folderName (item:items), bs) 
-
--- MAIN OPERATIONS
-
---pwd [option] - print name of current/working directory
--- FSCrumbs - get all before the focused dir + the name of the focused dir
-pwd :: FSZipper -> IO String
-pwd fsz = return $ getCurrentPath fsz
-
--- cd dir - Change the shell working directory.
--- dir - relative dir/ and absolute ../
--- split dir by '/' and for each [subdirname] call dirUp or gotoDir
--- for each ../ call dirUp
--- for each dir/ call gotoDir
--- does not work always for relative paths
-cd :: String -> FSZipper -> FSZipper
-cd dir fsz = 
-    let dirs = wordsBy '/' dir
-    in case dirs of
-        x -> if isAbsolute $ head x 
-             then dirUp fsz
-             else dirTo (head x) fsz 
-        (x:xs) -> if isAbsolute x
-                  then cd ls (dirUp fsz)
-                  else cd ls (dirTo x fsz)
-                  where ls = unwordsBy '/' xs
-
---cat file - print the data of file 
---make funct that takes the Data of File 
---if name is file 
---call that function and concat the data if multiple files 
--- if not file => error msg
--- does not change the FSCrumbs
--- > calls touch and display the Data
-cat :: [String] -> FSZipper -> String -> String
---cat [] _ _= "cat expect name of file as argument" 
-cat [file] fsz d = let (File name dat, bs) = dirTo file fsz in d ++ dat
-cat (file:files) fsz d  = 
-    if file == ">"
-    then newFile (File file d) fsz
-    else let (File name dat, bs) = dirTo file fsz
-         in d ++ (cat files fsz d)
-
--- touch
-touch :: [String] -> FSZipper -> FSZipper
---touch [] _ = putStrLn "touch expects file name as argument"
-touch [name] fsz = newFile (File name "") fsz
-
---mkdir
-mkdir :: [String] -> FSZipper -> FSZipper
---mkdir [] _ = putStrLn "mkdir expects file name as argument"
-mkdir [name] (Folder folderName items, bs) = 
-    let item = (Folder name [])
-    in (Folder folderName (item:items), bs) 
-                                                            
---ls [OPTION] [FILE] - list directory contents
---if no args => takes all none list items from the current dir from the zipper (our focused item)
---if args call funct that finds the dir without changing FSCrumbs and takes all none list items
-ls :: [String] -> FSZipper -> IO String
-ls [] (Folder name items, bc) = return $ (unwords (getAllChildren (fst items) (tail items) []))
-ls args fsz = let newFSZ = cd args fsz
-              in ls [] newFSZ
-
-getAllChildren :: FSItem -> [FSItem] -> [String] -> [String]
-getAllChildren item items children = case (fst items) of
-                                            x -> getAllChildren (fst items) (tail items) (children ++ (words (getItemName item)))
-getAllChildren item items children = case (fst items) of
-                                            x -> getAllChildren (fst items) (tail items) (children ++ (words (getItemName item)))
-
-
-
---rm
-rm :: [String] -> FSZipper -> FSZipper 
---rm [] _ = putStrLn "rm expect file name as argument"
-rm [name] (Folder folderName items, bs) = let (ls, f:rs) = break (isFile name) items 
-                                                       in (Folder folderName (ls ++ rs), bs) 
-rm [name] (Folder folderName items, bs) = let (ls, f:rs) = break (isDir name) items 
-                                                       in (Folder folderName (ls ++ rs), bs) 
-
---TODo 
--- mv
--- mv :: [String] -> FSZipper -> FSZipper  
--- mv [] _ = putStrLn "mv expects file name and file as arguments"
--- mv [newName] (Folder name items, bs) = (Folder newName items, bs)  
--- mv [newName] (File name dat, bs) = (File newName dat, bs)  
